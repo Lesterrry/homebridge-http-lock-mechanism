@@ -1,6 +1,6 @@
 var Service, Characteristic
 const packageJson = require('./package.json')
-const request = require('request')
+const miio = require('miio');
 
 module.exports = function (homebridge) {
   Service = homebridge.hap.Service
@@ -10,9 +10,8 @@ module.exports = function (homebridge) {
 
 function HTTPLock (log, config) {
   this.log = log
-
+  miio.device({ address: config['ip'], token: config['token'] }).then(device => this.device = device).catch(function(err){ this.log.error("[x] Init error"); this.log.error(err) })
   this.name = config.name
-  this.apiroute = config.apiroute
 
   this.autoLock = config.autoLock || false
   this.autoLockDelay = config.autoLockDelay || 10
@@ -27,84 +26,32 @@ function HTTPLock (log, config) {
   this.timeout = config.timeout || 5000
   this.http_method = config.http_method || 'GET'
 
-  this.pollInterval = config.pollInterval || 120
-
-  if (this.username != null && this.password != null) {
-    this.auth = {
-      user: this.username,
-      pass: this.password
-    }
-  }
-
   this.service = new Service.LockMechanism(this.name)
 }
 
 HTTPLock.prototype = {
-
   identify: function (callback) {
-    this.log('Identify requested!')
+    this.log('[!] Identify requested!')
     callback()
   },
 
-  _httpRequest: function (url, body, method, callback) {
-    request({
-      url: url,
-      body: body,
-      method: this.http_method,
-      timeout: this.timeout,
-      rejectUnauthorized: false,
-      auth: this.auth
-    },
-    function (error, response, body) {
-      callback(error, response, body)
-    })
-  },
-
   _getStatus: function (callback) {
-    var url = this.apiroute + '/status'
-    this.log.debug('Getting status: %s', url)
-
-    this._httpRequest(url, '', 'GET', function (error, response, responseBody) {
-      if (error) {
-        this.log.warn('Error getting status: %s', error.message)
-        this.service.getCharacteristic(Characteristic.LockCurrentState).updateValue(new Error('Polling failed'))
-        callback(error)
-      } else {
-        this.log.debug('Device response: %s', responseBody)
-        var json = JSON.parse(responseBody)
-        this.service.getCharacteristic(Characteristic.LockCurrentState).updateValue(json.currentState)
-        this.service.getCharacteristic(Characteristic.LockTargetState).updateValue(json.currentState)
-        this.log.debug('Updated state to: %s', json.currentState)
-        callback()
-      }
-    }.bind(this))
+    //TODO
   },
 
   setLockTargetState: function (value, callback) {
-    var url = this.apiroute + '/setState?value=' + value
-    this.log.debug('Setting state: %s', url)
-
-    this._httpRequest(url, '', this.http_method, function (error, response, responseBody) {
-      if (error) {
-        this.log.warn('Error setting state: %s', error.message)
-        callback(error)
+    this.device.call("set_power", [value ? "on" : "off"]).then(result => {
+        this.log.debug("[*] set_power result: " + result);
+      if(result[0] === "ok") {
+          this.service.getCharacteristic(Characteristic.LockCurrentState).updateValue(value);
+          callback()
       } else {
-        this.log('Set state to %s', value)
-        this.service.getCharacteristic(Characteristic.LockCurrentState).updateValue(value)
-        if (value === 1 && this.autoLock) {
-          this.autoLockFunction()
-        }
-        callback()
+          callback(new Error(result[0]));
       }
-    }.bind(this))
-  },
-
-  autoLockFunction: function () {
-    this.log('Waiting %s seconds for autolock', this.autoLockDelay)
-    setTimeout(() => {
-      this.service.setCharacteristic(Characteristic.LockTargetState, 1)
-      this.log('Autolocking...')
-    }, this.autoLockDelay * 1000)
+    }).catch(function(err) {
+      this.log.error("[x] set_power error: " + err);
+      callback(err);
+    });
   },
 
   getServices: function () {
